@@ -22,6 +22,7 @@ preprocessing path makes internally. Verified bitwise-equal to the real processo
 
 import copy
 import os
+from collections.abc import Mapping
 from typing import Any, Literal
 
 import numpy as np
@@ -61,6 +62,30 @@ _PROCESSOR_CACHE: dict[str, Any] = {}
 # num_tokens by 2 per media item.
 _IMAGE_MARKER = "<|image|>"
 _VIDEO_MARKER = "<|video|>"
+_MEDIA_TYPES = {"image", "image_url", "video", "video_url", "audio", "audio_url", "input_audio"}
+
+
+def _validate_media_rendering_support(messages: list[dict[str, Any]]) -> None:
+    def visit(content: Any, role: str, depth: int) -> None:
+        if isinstance(content, Mapping):
+            media_type = content.get("type")
+            if media_type in _MEDIA_TYPES:
+                if media_type in {"audio", "audio_url", "input_audio"}:
+                    raise NotImplementedError("GLM-5.3-Flash audio inputs are not supported by the tokenize pipeline.")
+                if role not in {"user", "pretrain"} or depth != 1:
+                    raise NotImplementedError(
+                        "GLM-5.3-Flash image/video inputs are only supported as direct user/pretrain content parts; "
+                        f"found {media_type!r} in role {role!r}."
+                    )
+                return
+            for value in content.values():
+                visit(value, role, depth + 1)
+        elif isinstance(content, list):
+            for value in content:
+                visit(value, role, depth + 1)
+
+    for message in messages:
+        visit(message.get("content"), message.get("role", ""), 0)
 
 
 def _video_frame_source(video_file: str, extra: dict) -> tuple[int, float]:
@@ -216,6 +241,7 @@ class Glm53VLTokenizeFunction(BaseMLLMTokenizeFunction):
         messages = list(data_item["messages"])
         if self.system_message is not None and (not messages or messages[0].get("role") != "system"):
             messages = [{"role": "system", "content": self.system_message}, *messages]
+        _validate_media_rendering_support(messages)
         return render_glm53_chat(
             messages,
             tools=data_item.get("tools"),
@@ -257,6 +283,7 @@ class Glm53VLTokenizeFunction(BaseMLLMTokenizeFunction):
         return self._cache_item(input_ids, num_img_tokens, data_item)
 
     def multi_modal_get_item(self, data_item: dict, media_root: str = "") -> Glm53VLDataItem:
+        _validate_media_rendering_support(data_item["messages"])
         images = []
         for image_file in self._image_path:
             image_path_ = get_image_path(image_file, media_root)
@@ -369,6 +396,7 @@ class Glm53VLTokenizeFunction(BaseMLLMTokenizeFunction):
         return self._cache_item(input_ids, num_img_tokens, data_item)
 
     def video_get_item(self, data_item: dict, media_root: str = "") -> Glm53VLDataItem:
+        _validate_media_rendering_support(data_item["messages"])
         assert len(self._video_extra_info_list) == len(self._video_path), (
             "GLM-5.3-Flash video runtime requires origin_video_length/origin_fps metadata for "
             f"every video, data_name: {self.data_name}."

@@ -389,6 +389,45 @@ class TestGlm53NativeHFInputContract:
 
 
 class TestGlm53MixedMediaAndTruncation:
+    @pytest.mark.parametrize(
+        ("messages", "error"),
+        [
+            (
+                [
+                    {"role": "system", "content": [{"type": "image", "image": {"url": "system.png"}}]},
+                    {
+                        "role": "user",
+                        "content": [{"type": "image", "image": {"url": "user.png", "image_wh": [448, 448]}}],
+                    },
+                ],
+                "only supported as direct user/pretrain",
+            ),
+            (
+                [{"role": "tool", "content": [{"type": "image", "image": {"url": "tool.png"}}]}],
+                "only supported as direct user/pretrain",
+            ),
+            (
+                [{"role": "tool", "content": [{"id": "call_1", "output": [{"type": "image"}]}]}],
+                "only supported as direct user/pretrain",
+            ),
+            (
+                [{"role": "user", "content": [{"type": "audio", "audio": {"url": "audio.wav"}}]}],
+                "audio inputs are not supported",
+            ),
+        ],
+    )
+    @pytest.mark.parametrize("state", ["cache", "runtime"])
+    def test_glm53_uncollected_media_fails_before_marker_expansion(
+        self,
+        tokenize_fn: Glm53VLTokenizeFunction,
+        messages: list[dict],
+        error: str,
+        state: str,
+    ) -> None:
+        tokenize_fn.state = state
+        with pytest.raises(NotImplementedError, match=error):
+            tokenize_fn({"messages": messages})
+
     @pytest.mark.parametrize("state", ["cache", "runtime"])
     def test_glm53_mixed_media_fails_fast(
         self, tokenize_fn: Glm53VLTokenizeFunction, state: str, monkeypatch: pytest.MonkeyPatch
